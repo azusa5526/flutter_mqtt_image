@@ -1,6 +1,6 @@
 # mqtt_esp32cam_viewer
 
-This is a practice project I cloned from [original project]([link-to-original-project](https://github.com/0015/ThatProject)).
+This is a practice project I cloned from https://github.com/0015/ThatProject
 
 ## License
 Copyright 2019 - 2022 Eric N
