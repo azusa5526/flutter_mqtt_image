@@ -5,13 +5,18 @@
   Created by Eric N. (ThatProject)
 */
 /////////////////////////////////////////////////////////////////
+import 'dart:async';
 import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:ndialog/ndialog.dart';
+import 'model.dart';
+
 void main() {
   runApp(MyApp());
 }
@@ -36,19 +41,31 @@ class MQTTClient extends StatefulWidget {
   _MQTTClientState createState() => _MQTTClientState();
 }
 
+MqttServerClient client = MqttServerClient('localhost', '');
+
 class _MQTTClientState extends State<MQTTClient> {
   String statusText = "Status Text";
   bool isConnected = false;
+  bool isStreaming = false;
+  bool isFlashing = false;
   TextEditingController idTextController = TextEditingController();
   TextEditingController serverClientController = TextEditingController();
-  TextEditingController topicTextController = TextEditingController();
-  MqttServerClient client = MqttServerClient('localhost', '');
+  TextEditingController topicPreController = TextEditingController();
+  StreamController<MqttMessage> cameraStreamController = StreamController();
+
+  @override
+  void initState() {
+    super.initState();
+    idTextController.text = 'Default';
+    serverClientController.text = '192.168.12.18';
+    topicPreController.text = 'topicPreTest';
+  }
 
   @override
   void dispose() {
     idTextController.dispose();
     serverClientController.dispose();
-    topicTextController.dispose();
+    topicPreController.dispose();
     super.dispose();
   }
 
@@ -112,45 +129,81 @@ class _MQTTClientState extends State<MQTTClient> {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: TextFormField(
-                enabled: !isConnected,
-                controller: idTextController,
-                decoration: InputDecoration(
-                    border: UnderlineInputBorder(),
-                    labelText: 'MQTT Client Id',
-                    labelStyle: TextStyle(fontSize: 10),
-                    suffixIcon: IconButton(
-                      icon: Icon(Icons.subdirectory_arrow_left),
-                      onPressed: _connect,
-                    ))),
+            padding: EdgeInsets.symmetric(vertical: 8.0),
+            child: ElevatedButton(
+                onPressed: () => showDialog<String>(
+                      context: context,
+                      builder: (BuildContext context) => Dialog(
+                        insetPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 28),
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextField(
+                                  enabled: !isConnected,
+                                  controller: idTextController,
+                                  decoration: InputDecoration(
+                                    border: UnderlineInputBorder(),
+                                    labelText: 'MQTT Client Id',
+                                    labelStyle: TextStyle(fontSize: 10),
+                                  )),
+                              TextField(
+                                  enabled: !isConnected,
+                                  controller: serverClientController,
+                                  decoration: InputDecoration(
+                                    border: UnderlineInputBorder(),
+                                    labelText: 'Server address',
+                                    labelStyle: TextStyle(fontSize: 10),
+                                  )),
+                              TextField(
+                                  enabled: !isConnected,
+                                  controller: topicPreController,
+                                  decoration: InputDecoration(
+                                    border: UnderlineInputBorder(),
+                                    labelText: 'Topic pre',
+                                    labelStyle: TextStyle(fontSize: 10),
+                                  )),
+                              Padding(
+                                padding: EdgeInsets.only(top: 20.0),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: ElevatedButton(
+                                          onPressed: isConnected
+                                              ? null
+                                              : () async {
+                                                  await _connect();
+                                                  Navigator.of(context).pop();
+                                                },
+                                          child: Text('Connect')),
+                                    ),
+                                    SizedBox(
+                                      width: 12,
+                                    ),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                          onPressed: isConnected
+                                              ? () {
+                                                  _disconnect();
+                                                  Navigator.of(context).pop();
+                                                }
+                                              : null,
+                                          child: Text('Disconnect')),
+                                    )
+                                  ],
+                                ),
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                child: Text('Connect options')),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: TextField(
-                enabled: !isConnected,
-                controller: serverClientController,
-                decoration: InputDecoration(
-                  border: UnderlineInputBorder(),
-                  labelText: 'Server client',
-                  labelStyle: TextStyle(fontSize: 10),
-                )),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: TextField(
-                enabled: !isConnected,
-                controller: topicTextController,
-                decoration: InputDecoration(
-                  border: UnderlineInputBorder(),
-                  labelText: 'Topic',
-                  labelStyle: TextStyle(fontSize: 10),
-                )),
-          ),
-          ElevatedButton(onPressed: _connect, child: Text('Connect')),
-          isConnected
-              ? TextButton(onPressed: _disconnect, child: Text('Disconnect'))
-              : Container()
+          Container()
         ],
       ),
     );
@@ -160,20 +213,31 @@ class _MQTTClientState extends State<MQTTClient> {
     return Container(
       color: Colors.black,
       child: StreamBuilder(
-        stream: client.updates,
+        stream: cameraStreamController.stream,
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            );
+                child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 16.0, // 宽度
+                  height: 16.0, // 高度
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                SizedBox(width: 16.0),
+                Text(
+                  'Waiting for streaming...',
+                  style: TextStyle(fontSize: 16.0),
+                ),
+              ],
+            ));
           } else {
-            final mqttReceivedMessages =
-                snapshot.data as List<MqttReceivedMessage<MqttMessage?>>?;
+            final mqttReceivedMessages = snapshot.data as MqttMessage;
 
-            final recMess =
-                mqttReceivedMessages![0].payload as MqttPublishMessage;
+            final recMess = mqttReceivedMessages as MqttPublishMessage;
 
             return Image.memory(
               Uint8List.view(recMess.payload.message.buffer, 0,
@@ -189,44 +253,60 @@ class _MQTTClientState extends State<MQTTClient> {
   Widget footer() {
     return Expanded(
       child: Container(
-          alignment: Alignment.centerRight,
-          padding: const EdgeInsets.only(right: 16),
-          child: Row(
+          padding: const EdgeInsets.only(top: 12.0, left: 16.0, right: 16.0),
+          child: Column(
             children: [
-              Text(
-                statusText,
-                style: TextStyle(
-                    fontWeight: FontWeight.normal, color: Colors.amberAccent),
-              ),
-              ElevatedButton(
-                  onPressed: _onSayFuckClicked, child: Text('Say Fuck!'))
+              Expanded(
+                  child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                        onPressed: isConnected ? _onStreamControlClick : null,
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                isStreaming ? Colors.green : Colors.red),
+                        child: Text(
+                          'Stream',
+                        )),
+                  ),
+                  SizedBox(
+                    width: 12.0,
+                  ),
+                  Expanded(
+                    child: ElevatedButton(
+                        onPressed: isConnected ? _onFlashControlClick : null,
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                isFlashing ? Colors.green : Colors.red),
+                        child: Text('Flash')),
+                  )
+                ],
+              )),
+              Expanded(
+                  child: Container(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  statusText,
+                  style: TextStyle(
+                      fontWeight: FontWeight.normal, color: Colors.amberAccent),
+                ),
+              )),
             ],
           )),
-      flex: 1,
+      flex: 3,
     );
   }
 
   _connect() async {
     if (idTextController.text.trim().isNotEmpty &&
         serverClientController.text.trim().isNotEmpty &&
-        topicTextController.text.trim().isNotEmpty) {
-      ProgressDialog progressDialog = ProgressDialog(context,
-          blur: 0,
-          dialogTransitionType: DialogTransitionType.Shrink,
-          dismissable: false);
-      progressDialog.setLoadingWidget(CircularProgressIndicator(
-        valueColor: AlwaysStoppedAnimation(Colors.red),
-      ));
-      progressDialog
-          .setMessage(Text("Please Wait, Connecting to AWS IoT MQTT Broker"));
-      progressDialog.setTitle(Text("Connecting"));
-      progressDialog.show();
-
+        topicPreController.text.trim().isNotEmpty) {
       _disconnect();
       client.server = serverClientController.text.trim();
 
-      isConnected = await mqttConnect(idTextController.text.trim(), topicTextController.text.trim());
-      progressDialog.dismiss();
+      isConnected = await mqttConnect(idTextController.text.trim(),
+          '${topicPreController.text.trim()}/camera');
     }
   }
 
@@ -234,12 +314,27 @@ class _MQTTClientState extends State<MQTTClient> {
     client.disconnect();
   }
 
-  _onSayFuckClicked() {
-    const pubTopic = 'test2';
-    final builder = MqttClientPayloadBuilder();
-    builder.addString('Fuck!');
+  _onStreamControlClick() {
+    String topicPre = topicPreController.text.trim();
+    if (topicPre.isEmpty) return;
 
-    client.publishMessage(pubTopic, MqttQos.atLeastOnce, builder.payload!);
+    var params = {'v': !isStreaming};
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(jsonEncode(params));
+
+    client.publishMessage(
+        '${topicPre}/remote', MqttQos.atLeastOnce, builder.payload!);
+  }
+
+  _onFlashControlClick() {
+    String topicPre = topicPreController.text.trim();
+    if (topicPre.isEmpty) return;
+
+    var params = {'f': !isFlashing};
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(jsonEncode(params));
+    client.publishMessage(
+        '${topicPre}/remote', MqttQos.atLeastOnce, builder.payload!);
   }
 
   Future<bool> mqttConnect(String uniqueId, String topic) async {
@@ -273,12 +368,37 @@ class _MQTTClientState extends State<MQTTClient> {
 
     await client.connect();
     if (client.connectionStatus!.state == MqttConnectionState.connected) {
-      print("Connected to AWS Successfully!");
+      print("Connected to Server Successfully!");
     } else {
       return false;
     }
 
     client.subscribe(topic, MqttQos.atMostOnce);
+    client.subscribe(
+        '${topicPreController.text.trim()}/status', MqttQos.atMostOnce);
+
+    client.updates?.listen((event) {
+      switch (event[0].topic) {
+        case 'topicPreTest/camera':
+          cameraStreamController.add(event[0].payload);
+          break;
+        case 'topicPreTest/status':
+          final publishMessage = event[0].payload as MqttPublishMessage;
+          String jsonString =
+              new String.fromCharCodes(publishMessage.payload.message);
+          final ControlOptions options =
+              ControlOptions.fromJson(json.decode(jsonString));
+          log(jsonString);
+
+          setState(() {
+            if (options.v != null) isStreaming = options.v as bool;
+            if (options.f != null) isFlashing = options.f as bool;
+          });
+          break;
+        default:
+          log('Unsupported event');
+      }
+    });
 
     return true;
   }
